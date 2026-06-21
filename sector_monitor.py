@@ -244,6 +244,101 @@ def parse_kline_data(raw_data):
     return df
 
 
+
+# ══════════════════════════════════════════════════════════════
+#  新浪分时数据辅助函数
+# ══════════════════════════════════════════════════════════════
+
+def _find_stock_code(stock_name):
+    """
+    根据股票名称查找代码
+    返回格式: 'sh600519' 或 'sz000858'
+    """
+    # 常见领涨股名称 → 代码映射
+    common_stocks = {
+        # 白酒
+        '贵州茅台': 'sh600519', '五粮液': 'sz000858', '泸州老窖': 'sz000568',
+        '山西汾酒': 'sh600809', '洋河股份': 'sz002304', '古井贡酒': 'sz000596',
+        '今世缘': 'sh603369', '舍得酒业': 'sh600702', '酒鬼酒': 'sz000799',
+        # 半导体/芯片
+        '北方华创': 'sz002371', '中芯国际': 'sh688981', '韦尔股份': 'sh603501',
+        '紫光国微': 'sz002049', '兆易创新': 'sh603986', '卓胜微': 'sz300782',
+        '澜起科技': 'sh688008', '中微公司': 'sh688012', '长电科技': 'sh600584',
+        '华虹半导体': 'sh688347', '海光信息': 'sh688041', '寒武纪': 'sh688256',
+        # 新能源
+        '宁德时代': 'sz300750', '比亚迪': 'sz002594', '隆基绿能': 'sh601012',
+        '阳光电源': 'sz300274', '通威股份': 'sh600438', '亿纬锂能': 'sz300014',
+        '天齐锂业': 'sz002466', '赣锋锂业': 'sz002460',
+        # 医药
+        '恒瑞医药': 'sh600276', '药明康德': 'sh603259', '迈瑞医疗': 'sz300760',
+        '片仔癀': 'sh600436', '云南白药': 'sz000538', '爱尔眼科': 'sz300015',
+        '智飞生物': 'sz300122', '长春高新': 'sz000661',
+        # 军工
+        '中航光电': 'sz002179', '航发动力': 'sh600893', '中航沈飞': 'sh600760',
+        '中航西飞': 'sz000768', '紫光国微': 'sz002049',
+        # 证券
+        '中信证券': 'sh600030', '东方财富': 'sz300059', '国泰君安': 'sh601211',
+        '华泰证券': 'sh601688', '招商证券': 'sh600999',
+        # 银行
+        '招商银行': 'sh600036', '工商银行': 'sh601398', '建设银行': 'sh601939',
+        '农业银行': 'sh601288', '中国银行': 'sh601988', '兴业银行': 'sh601166',
+        # 通信/5G
+        '中兴通讯': 'sz000063', '中国移动': 'sh600941', '中国电信': 'sh601728',
+        # 人工智能/科技
+        '海康威视': 'sz002415', '立讯精密': 'sz002475', '科大讯飞': 'sz002230',
+        '金山办公': 'sh688111',
+        # 汽车
+        '长安汽车': 'sz000625', '长城汽车': 'sh601633', '广汽集团': 'sh601238',
+        # 房地产
+        '万科A': 'sz000002', '保利发展': 'sh600048', '招商蛇口': 'sz001979',
+        # 有色/贵金属
+        '紫金矿业': 'sh601899', '山东黄金': 'sh600547', '中金黄金': 'sh600489',
+        # 化工
+        '万华化学': 'sh600309', '恒力石化': 'sh600346',
+        # 消费电子
+        '歌尔股份': 'sz002241', '蓝思科技': 'sz300433',
+    }
+
+    code = common_stocks.get(stock_name)
+    if code:
+        return code
+
+    # 如果没找到，尝试从新浪全量股票列表中搜索（带缓存）
+    if not hasattr(_find_stock_code, '_stock_map'):
+        try:
+            import akshare as ak
+            df = ak.stock_zh_a_spot()
+            # 列名可能是中文，用位置索引：第0列=symbol, 第1列=名称
+            _find_stock_code._stock_map = dict(zip(df.iloc[:, 1], df.iloc[:, 0]))
+        except Exception:
+            _find_stock_code._stock_map = {}
+
+    return _find_stock_code._stock_map.get(stock_name)
+
+
+def _fetch_sina_minute(stock_code):
+    """
+    从新浪获取个股分时K线数据
+
+    Parameters:
+    -----------
+    stock_code: str
+        格式: 'sh600519' 或 'sz000858'
+
+    Returns:
+    --------
+    DataFrame 或 None
+    """
+    try:
+        import akshare as ak
+        df = ak.stock_zh_a_minute(symbol=stock_code, period='5')
+        if df is not None and not df.empty:
+            return df
+    except Exception as e:
+        pass
+    return None
+
+
 # ══════════════════════════════════════════════════════════════
 #  统一接口: 自动选择最佳数据源
 # ══════════════════════════════════════════════════════════════
@@ -295,7 +390,7 @@ def fetch_sector_line_data(top_n=10, sector_type='industry'):
             print(f"  [OK] 东财数据获取成功: {success_count}个板块, {len(times)}个时间点")
             return sector_data, times, top_sectors, 'eastmoney'
 
-    # ── 方案2: 新浪日级数据（稳定） ──
+    # ── 方案2: 新浪分时数据（稳定） ──
     print("  [数据源切换] 东财不可用，使用新浪源...")
 
     sina_df = fetch_sector_ranking_sina(top_n, sector_type)
@@ -303,42 +398,72 @@ def fetch_sector_line_data(top_n=10, sector_type='industry'):
         print("  [X] 所有数据源均不可用")
         return None, None, None, None
 
-    # 新浪没有分时数据，用当日累计净流入构造静态折线
-    # 模拟一条从0到当前累计值的平滑曲线
-    now = datetime.now()
-    morning_start = now.replace(hour=9, minute=30, second=0)
-    morning_end = now.replace(hour=11, minute=30, second=0)
-
-    if now.hour < 13:
-        # 上午场
-        times = pd.date_range(start=morning_start, end=min(now, morning_end), freq='5min')
-    else:
-        # 全天场
-        afternoon_start = now.replace(hour=13, minute=0, second=0)
-        afternoon_end = now.replace(hour=15, minute=0, second=0)
-        morning_times = pd.date_range(start=morning_start, end=morning_end, freq='5min')
-        afternoon_times = pd.date_range(start=afternoon_start, end=min(now, afternoon_end), freq='5min')
-        times = pd.DatetimeIndex(morning_times.tolist() + afternoon_times.tolist())
-
-    n = len(times)
+    # 用板块领涨股的分时价格走势作为资金流向代理（有真实波动）
     sector_data = {}
+    all_times = None
+    success_count = 0
 
     for _, row in sina_df.iterrows():
         name = row['板块名称']
         total = row['主力净流入(亿)']
 
-        # 用tanh曲线模拟资金流入过程（先快后慢）
-        t = np.linspace(0, 3, n)
-        curve = total * (np.tanh(t - 1.5) + 1) / 2
-        # 确保起点接近0，终点等于total
-        curve = curve - curve[0]
-        if abs(curve[-1]) > 1e-10:
-            curve = curve * (total / curve[-1])
+        # 获取领涨股代码
+        leader_stock = row.get('领涨股', '')
+        if not leader_stock:
+            continue
 
-        sector_data[name] = curve.tolist()
+        # 查找领涨股的股票代码
+        stock_code = _find_stock_code(leader_stock)
+        if not stock_code:
+            print(f"  [!] {name}: 无法找到领涨股 {leader_stock} 的代码，跳过")
+            continue
 
-    print(f"  [OK] 新浪数据获取成功: {len(sector_data)}个板块, {n}个时间点(模拟曲线)")
-    return sector_data, times, sina_df, 'sina'
+        print(f"  获取 {name} 领涨股 {leader_stock}({stock_code}) 分时数据...")
+
+        # 从新浪获取分时数据
+        minute_data = _fetch_sina_minute(stock_code)
+        if minute_data is None or minute_data.empty:
+            print(f"    {name}: 分时数据为空，跳过")
+            continue
+
+        # 只保留最后一天的数据（跳过涨停/跌停无波动的天）
+        minute_data['day'] = pd.to_datetime(minute_data['day'])
+        dates = sorted(minute_data['day'].dt.date.unique(), reverse=True)
+
+        today_data = None
+        for d in dates[:3]:  # 尝试最近3天
+            day_data = minute_data[minute_data['day'].dt.date == d].copy()
+            prices_check = pd.to_numeric(day_data['close'], errors='coerce').values
+            if len(day_data) >= 5 and np.std(prices_check) > 0.001:
+                today_data = day_data
+                break
+
+        if today_data is None or today_data.empty:
+            print(f"    {name}: 无有效分时数据，跳过")
+            continue
+
+        # 用价格变化率 * 净流入方向 作为资金流向代理
+        prices = pd.to_numeric(today_data['close'], errors='coerce').values
+        price_change_pct = (prices / prices[0] - 1) * 100  # 相对开盘价的变化率
+        # 用净流入的正负号来确定方向，用价格波动来提供真实起伏
+        direction = 1 if total >= 0 else -1
+        flow_proxy = price_change_pct * direction * abs(total) / (abs(price_change_pct[-1]) + 0.01)
+
+        sector_data[name] = flow_proxy.tolist()
+
+        if all_times is None:
+            all_times = today_data['day'].values
+
+        success_count += 1
+        time.sleep(0.3)
+
+    if success_count >= 3 and all_times is not None:
+        times = pd.DatetimeIndex(all_times)
+        print(f"  [OK] 新浪分时数据获取成功: {success_count}个板块, {len(times)}个时间点")
+        return sector_data, times, sina_df, 'sina'
+    else:
+        print(f"  [!] 只获取到 {success_count} 个板块数据，不足3个")
+        return None, None, None, None
 
 
 def verify_sector_data(sector_data, sector_ranking_df, data_source='sina', tolerance=0.15):
