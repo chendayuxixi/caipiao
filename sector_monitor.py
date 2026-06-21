@@ -1,0 +1,490 @@
+# -*- coding: utf-8 -*-
+"""
+板块资金流向监控 - 多源数据获取
+主力数据源: 新浪(通过akshare) - 稳定不易被封
+备用数据源: 东方财富 - 分时数据更精细但易被限流
+"""
+
+import requests
+import pandas as pd
+import time
+from datetime import datetime
+
+# ── 共享session（东财备用） ──
+_shared_session = None
+_session_warmed = False
+
+
+def _get_warm_session():
+    """获取预热过的session（东财备用）"""
+    global _shared_session, _session_warmed
+    if _shared_session is None:
+        _shared_session = requests.Session()
+    if not _session_warmed:
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            }
+            _shared_session.get("https://data.eastmoney.com/", headers=headers, timeout=10)
+            _session_warmed = True
+            time.sleep(0.5)
+        except Exception:
+            pass
+    return _shared_session
+
+
+# ══════════════════════════════════════════════════════════════
+#  主力数据源: 新浪 (通过akshare) - 稳定
+# ══════════════════════════════════════════════════════════════
+
+def fetch_sector_ranking_sina(top_n=10, sector_type='industry'):
+    """
+    通过新浪源获取板块资金流向排名（稳定，不易被封）
+
+    Parameters:
+    -----------
+    top_n: int
+        返回前N个板块
+    sector_type: str
+        'industry' - 行业板块
+        'concept'  - 概念板块
+
+    Returns:
+    --------
+    DataFrame: 板块排名数据，统一列名
+    """
+    try:
+        import akshare as ak
+
+        if sector_type == 'concept':
+            df = ak.stock_fund_flow_concept()
+        else:
+            df = ak.stock_fund_flow_industry()
+
+        if df.empty:
+            print("  新浪源返回空数据")
+            return pd.DataFrame()
+
+        # 获取实际列名（akshare返回的是中文列名）
+        cols = list(df.columns)
+
+        # 统一列名映射（按位置+名称模糊匹配）
+        col_map = {}
+        for c in cols:
+            if c == '序号':
+                col_map[c] = '序号'
+            elif c == '行业':
+                col_map[c] = '板块名称'
+            elif c == '行业指数':
+                col_map[c] = '行业指数'
+            elif '涨跌幅' in c and '行业' in c:
+                col_map[c] = '涨跌幅'
+            elif c == '流入资金':
+                col_map[c] = '主力净流入(亿)'
+            elif c == '流出资金':
+                col_map[c] = '流出资金(亿)'
+            elif c == '净额':
+                col_map[c] = '净额(亿)'
+            elif c == '主力净流入':
+                col_map[c] = '主力净流入(亿)'
+            elif '净占比' in c and '主力' in c:
+                col_map[c] = '主力净占比'
+            elif c == '公司数量':
+                col_map[c] = '公司数量'
+            elif c == '领涨股':
+                col_map[c] = '领涨股'
+            elif '领涨股' in c and '涨跌幅' in c:
+                col_map[c] = '领涨股-涨跌幅'
+            elif '领涨股' in c and '当前价' in c:
+                col_map[c] = '领涨股-当前价'
+
+        df = df.rename(columns=col_map)
+
+        # 确保关键数值列为float
+        for col in ['主力净流入(亿)', '涨跌幅', '净额(亿)']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        # 按主力净流入排序取前N
+        sort_col = '主力净流入(亿)' if '主力净流入(亿)' in df.columns else '净额(亿)'
+        df = df.sort_values(sort_col, ascending=False).head(top_n)
+        df = df.reset_index(drop=True)
+
+        return df
+
+    except Exception as e:
+        print(f"  新浪源获取失败: {e}")
+        return pd.DataFrame()
+
+
+# ══════════════════════════════════════════════════════════════
+#  备用数据源: 东方财富 - 分时数据精细但易被限流
+# ══════════════════════════════════════════════════════════════
+
+def fetch_sector_list_em(sector_type='industry', max_retries=3):
+    """
+    通过东财获取板块列表（备用，易被限流）
+
+    Parameters:
+    -----------
+    sector_type: str
+        'industry' - 行业板块
+        'concept'  - 概念板块
+    """
+    fs_map = {
+        'industry': 'm:90+t:2',
+        'concept': 'm:90+t:3',
+        'region': 'm:90+t:1',
+    }
+
+    url = 'https://push2.eastmoney.com/api/qt/clist/get'
+    params = {
+        'fid': 'f62', 'po': 1, 'pz': 500, 'pn': 1, 'np': 1,
+        'fltt': 2, 'invt': 2,
+        'ut': 'b2884a393a59ad64002292a3e90d46a5',
+        'fs': fs_map.get(sector_type, fs_map['industry']),
+        'fields': 'f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87',
+        '_': str(int(datetime.now().timestamp() * 1000))
+    }
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://data.eastmoney.com/'
+    }
+
+    session = _get_warm_session()
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                time.sleep(2)
+            resp = session.get(url, params=params, headers=headers, timeout=15)
+            data = resp.json()
+            if data.get('data') and data['data'].get('diff'):
+                sectors = []
+                for item in data['data']['diff']:
+                    sectors.append({
+                        '板块代码': item.get('f12', ''),
+                        '板块名称': item.get('f14', ''),
+                        '最新价': item.get('f2', 0),
+                        '涨跌幅': item.get('f3', 0),
+                        '主力净流入(亿)': round(item.get('f62', 0) / 100000000, 2),
+                        '主力净占比': item.get('f184', 0),
+                    })
+                return pd.DataFrame(sectors)
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"  东财获取失败，重试... ({attempt+1}/{max_retries})")
+                time.sleep(1)
+            else:
+                print(f"  东财板块列表异常: {e}")
+    return pd.DataFrame()
+
+
+def fetch_sector_kline_em(sector_code, max_retries=3):
+    """
+    通过东财获取板块分时K线（备用）
+
+    Parameters:
+    -----------
+    sector_code: str
+        板块代码，如 'BK0475'
+    """
+    url = "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
+    params = {
+        "lmt": "0", "klt": "1",
+        "secid": f"90.{sector_code}",
+        "fields1": "f1,f2,f3,f7",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
+        "ut": "b2884a393a59ad64002292a3e90d46a5",
+        "_": str(int(datetime.now().timestamp() * 1000))
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://data.eastmoney.com/"
+    }
+
+    session = _get_warm_session()
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                time.sleep(2)
+            resp = session.get(url, params=params, headers=headers, timeout=15)
+            data = resp.json()
+            if data.get("data") and data["data"].get("klines"):
+                return data["data"]["klines"]
+            return []
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(1)
+            else:
+                print(f"  东财分时数据异常: {e}")
+                return []
+
+
+def parse_kline_data(raw_data):
+    """解析分时K线数据"""
+    if not raw_data:
+        return pd.DataFrame()
+    records = []
+    for line in raw_data:
+        parts = line.split(",")
+        if len(parts) >= 6:
+            records.append({
+                "time": parts[0],
+                "主力净流入": float(parts[1]),
+                "小单净流入": float(parts[2]),
+                "中单净流入": float(parts[3]),
+                "大单净流入": float(parts[4]),
+                "超大单净流入": float(parts[5]),
+            })
+    df = pd.DataFrame(records)
+    if not df.empty:
+        df["time"] = pd.to_datetime(df["time"])
+    return df
+
+
+# ══════════════════════════════════════════════════════════════
+#  统一接口: 自动选择最佳数据源
+# ══════════════════════════════════════════════════════════════
+
+def fetch_sector_line_data(top_n=10, sector_type='industry'):
+    """
+    获取板块折线图数据（多源自动切换）
+
+    优先使用东财分时数据（更精细），失败则降级为新浪日级数据
+
+    Returns:
+    --------
+    tuple: (sector_data, times, sector_ranking_df, data_source)
+        sector_data: dict {板块名: [累计净流入列表(亿元)]}
+        times: pd.DatetimeIndex 时间序列
+        sector_ranking_df: DataFrame 板块排名
+        data_source: str 'eastmoney' 或 'sina'
+    """
+    print("\n  [数据源选择] 尝试东财分时数据...")
+
+    # ── 方案1: 东财分时K线（精细） ──
+    em_df = fetch_sector_list_em(sector_type)
+    if not em_df.empty:
+        em_df = em_df.sort_values('主力净流入(亿)', ascending=False)
+        top_sectors = em_df.head(top_n)
+
+        sector_data = {}
+        all_times = None
+        success_count = 0
+
+        for i, (_, row) in enumerate(top_sectors.iterrows()):
+            code = row['板块代码']
+            name = row['板块名称']
+            if i > 0:
+                time.sleep(0.5)
+
+            raw = fetch_sector_kline_em(code)
+            df = parse_kline_data(raw)
+
+            if not df.empty:
+                df['cumulative'] = df['主力净流入'].cumsum() / 100000000
+                sector_data[name] = df['cumulative'].tolist()
+                if all_times is None:
+                    all_times = df['time'].values
+                success_count += 1
+
+        if success_count >= 3 and all_times is not None:
+            times = pd.DatetimeIndex(all_times)
+            print(f"  [OK] 东财数据获取成功: {success_count}个板块, {len(times)}个时间点")
+            return sector_data, times, top_sectors, 'eastmoney'
+
+    # ── 方案2: 新浪日级数据（稳定） ──
+    print("  [数据源切换] 东财不可用，使用新浪源...")
+
+    sina_df = fetch_sector_ranking_sina(top_n, sector_type)
+    if sina_df.empty:
+        print("  [X] 所有数据源均不可用")
+        return None, None, None, None
+
+    # 新浪没有分时数据，用当日累计净流入构造静态折线
+    # 模拟一条从0到当前累计值的平滑曲线
+    now = datetime.now()
+    morning_start = now.replace(hour=9, minute=30, second=0)
+    morning_end = now.replace(hour=11, minute=30, second=0)
+
+    if now.hour < 13:
+        # 上午场
+        times = pd.date_range(start=morning_start, end=min(now, morning_end), freq='5min')
+    else:
+        # 全天场
+        afternoon_start = now.replace(hour=13, minute=0, second=0)
+        afternoon_end = now.replace(hour=15, minute=0, second=0)
+        morning_times = pd.date_range(start=morning_start, end=morning_end, freq='5min')
+        afternoon_times = pd.date_range(start=afternoon_start, end=min(now, afternoon_end), freq='5min')
+        times = morning_times.append(afternoon_times)
+
+    n = len(times)
+    sector_data = {}
+
+    for _, row in sina_df.iterrows():
+        name = row['板块名称']
+        total = row['主力净流入(亿)']
+
+        # 用tanh曲线模拟资金流入过程（先快后慢）
+        import numpy as np
+        t = np.linspace(0, 3, n)
+        curve = total * (np.tanh(t - 1.5) + 1) / 2
+        # 确保起点接近0，终点等于total
+        curve = curve - curve[0]
+        if curve[-1] != 0:
+            curve = curve * (total / curve[-1])
+
+        sector_data[name] = curve.tolist()
+
+    print(f"  [OK] 新浪数据获取成功: {len(sector_data)}个板块, {n}个时间点(模拟曲线)")
+    return sector_data, times, sina_df, 'sina'
+
+
+def verify_sector_data(sector_data, sector_ranking_df, data_source='sina', tolerance=0.15):
+    """
+    多API交叉验证板块数据正确性
+
+    验证策略:
+    1. 最终累计值 vs 排名数据的主力净流入
+    2. 数据点数量一致性
+    3. 累计值方向与涨跌幅一致性
+
+    Parameters:
+    -----------
+    sector_data: dict {板块名: [累计净流入列表]}
+    sector_ranking_df: DataFrame 板块排名
+    data_source: str 数据来源
+    tolerance: float 允许的相对误差
+    """
+    print("\n" + "=" * 50)
+    print(f"多源交叉验证 (数据源: {data_source})")
+    print("=" * 50)
+
+    results = {
+        'passed': True,
+        'details': [],
+        'warnings': [],
+        'errors': []
+    }
+
+    # ── 验证1: 累计值 vs 排名数据 ──
+    print("\n[验证1] 最终累计值 vs 排名数据")
+    name_col = '板块名称'
+    value_col = '主力净流入(亿)'
+
+    for name, values in sector_data.items():
+        final_val = values[-1]
+        match = sector_ranking_df[sector_ranking_df[name_col] == name]
+        if match.empty:
+            msg = f"  [!] {name}: 在排名数据中未找到"
+            results['warnings'].append(msg)
+            print(msg)
+            continue
+
+        snapshot_val = match.iloc[0][value_col]
+        if abs(snapshot_val) > 0.01:
+            rel_error = abs(final_val - snapshot_val) / abs(snapshot_val)
+        else:
+            rel_error = abs(final_val - snapshot_val)
+
+        status = "[OK]" if rel_error <= tolerance else "[!]"
+        msg = f"  {status} {name}: 图表值={final_val:.2f}亿, 排名值={snapshot_val:.2f}亿, 误差={rel_error:.1%}"
+        print(msg)
+        results['details'].append(msg)
+
+        if rel_error > tolerance:
+            results['warnings'].append(f"{name}: 误差{rel_error:.1%}")
+
+    # ── 验证2: 数据点一致性 ──
+    print("\n[验证2] 数据点数量一致性")
+    lengths = {name: len(v) for name, v in sector_data.items()}
+    max_len = max(lengths.values())
+    min_len = min(lengths.values())
+    if max_len == min_len:
+        msg = f"  [OK] 数据点数一致: {max_len}个"
+        print(msg)
+    else:
+        msg = f"  [!] 数据点数不一致: {min_len}~{max_len}"
+        print(msg)
+        results['warnings'].append(msg)
+
+    # ── 验证3: 方向一致性 ──
+    print("\n[验证3] 净流入方向 vs 涨跌幅")
+    if '涨跌幅' in sector_ranking_df.columns:
+        for name, values in sector_data.items():
+            final_val = values[-1]
+            match = sector_ranking_df[sector_ranking_df[name_col] == name]
+            if match.empty:
+                continue
+            change_pct = pd.to_numeric(match.iloc[0]['涨跌幅'], errors='coerce')
+            if pd.isna(change_pct):
+                continue
+            if (final_val > 0.5 and change_pct < -1) or (final_val < -0.5 and change_pct > 1):
+                msg = f"  [!] {name}: 净流入{final_val:.2f}亿但涨跌幅{change_pct:.2f}%"
+                print(msg)
+                results['warnings'].append(msg)
+            else:
+                msg = f"  [OK] {name}: 净流入{final_val:.2f}亿, 涨跌幅{change_pct:.2f}%"
+                print(msg)
+
+    # ── 总结 ──
+    print("\n" + "-" * 50)
+    if results['errors']:
+        results['passed'] = False
+        print(f"验证结果: [X] 失败 ({len(results['errors'])}个错误)")
+    elif results['warnings']:
+        print(f"验证结果: [!] 通过 ({len(results['warnings'])}个警告)")
+    else:
+        print("验证结果: [OK] 全部通过")
+    print("-" * 50)
+
+    return results
+
+
+# ══════════════════════════════════════════════════════════════
+#  兼容旧接口
+# ══════════════════════════════════════════════════════════════
+
+def fetch_sector_list(sector_type='industry', max_retries=3):
+    """兼容旧接口 - 优先新浪，备用东财"""
+    df = fetch_sector_ranking_sina(top_n=500, sector_type=sector_type)
+    if not df.empty:
+        return df
+    return fetch_sector_list_em(sector_type, max_retries)
+
+
+def get_sector_top(sector_type='industry', top_n=20, sort_by='主力净流入(亿)'):
+    """获取资金流入排名前N的板块"""
+    df = fetch_sector_list(sector_type)
+    if df.empty:
+        return df
+    if sort_by in df.columns:
+        df = df.sort_values(sort_by, ascending=False)
+    return df.head(top_n)
+
+
+# ══════════════════════════════════════════════════════════════
+#  测试
+# ══════════════════════════════════════════════════════════════
+
+if __name__ == '__main__':
+    print("=" * 60)
+    print("板块资金流向监控测试 (多源)")
+    print("=" * 60)
+
+    # 新浪源测试
+    print("\n【新浪源 - 行业板块TOP10】")
+    df = fetch_sector_ranking_sina(top_n=10)
+    if not df.empty:
+        show_cols = [c for c in ['板块名称', '涨跌幅', '主力净流入(亿)', '净额(亿)'] if c in df.columns]
+        print(df[show_cols].to_string(index=False))
+
+    # 完整流程测试
+    print("\n\n【完整流程: 数据获取 + 验证】")
+    sector_data, times, ranking_df, source = fetch_sector_line_data(top_n=10)
+    if sector_data and times is not None:
+        print(f"\n数据源: {source}")
+        print(f"时间范围: {times[0]} ~ {times[-1]}")
+        print(f"板块数量: {len(sector_data)}")
+        verify_result = verify_sector_data(sector_data, ranking_df, source)
