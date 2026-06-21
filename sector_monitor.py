@@ -7,6 +7,7 @@
 
 import requests
 import pandas as pd
+import numpy as np
 import time
 from datetime import datetime
 
@@ -317,7 +318,7 @@ def fetch_sector_line_data(top_n=10, sector_type='industry'):
         afternoon_end = now.replace(hour=15, minute=0, second=0)
         morning_times = pd.date_range(start=morning_start, end=morning_end, freq='5min')
         afternoon_times = pd.date_range(start=afternoon_start, end=min(now, afternoon_end), freq='5min')
-        times = morning_times.append(afternoon_times)
+        times = pd.DatetimeIndex(morning_times.tolist() + afternoon_times.tolist())
 
     n = len(times)
     sector_data = {}
@@ -327,12 +328,11 @@ def fetch_sector_line_data(top_n=10, sector_type='industry'):
         total = row['主力净流入(亿)']
 
         # 用tanh曲线模拟资金流入过程（先快后慢）
-        import numpy as np
         t = np.linspace(0, 3, n)
         curve = total * (np.tanh(t - 1.5) + 1) / 2
         # 确保起点接近0，终点等于total
         curve = curve - curve[0]
-        if curve[-1] != 0:
+        if abs(curve[-1]) > 1e-10:
             curve = curve * (total / curve[-1])
 
         sector_data[name] = curve.tolist()

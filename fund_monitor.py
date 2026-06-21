@@ -5,12 +5,11 @@
 """
 
 import os
-import json
 import time
 import requests
 import pandas as pd
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
+from datetime import datetime
 from config import STOCK_LIST, DATA_DIR, CHART_DIR
 
 # 设置中文字体

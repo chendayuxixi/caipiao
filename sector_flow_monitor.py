@@ -7,8 +7,7 @@ import os
 import time
 from datetime import datetime
 from sector_monitor import fetch_sector_list, get_sector_top
-from fund_monitor import generate_chart
-from config import CHART_DIR
+from config import CHART_DIR, DATA_DIR
 
 
 def monitor_sector_flow(sector_type='industry', top_n=10, refresh_interval=300):
@@ -55,9 +54,9 @@ def monitor_sector_flow(sector_type='industry', top_n=10, refresh_interval=300):
             print(display_df.to_string())
 
             # 保存到CSV
-            os.makedirs('data', exist_ok=True)
+            os.makedirs(DATA_DIR, exist_ok=True)
             today = datetime.now().strftime("%Y%m%d")
-            csv_file = f"data/sector_{sector_type}_{today}.csv"
+            csv_file = f"{DATA_DIR}/sector_{sector_type}_{today}.csv"
             df.to_csv(csv_file, index=False, encoding='utf-8-sig')
             print(f"\n数据已保存: {csv_file}")
         else:

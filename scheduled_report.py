@@ -7,8 +7,8 @@
 """
 
 import time
-import os
-from datetime import datetime
+import traceback
+from datetime import datetime, date
 from flow_animator import generate_all_animations
 from fund_monitor import monitor_all
 
@@ -42,17 +42,15 @@ def wait_until(target_time_str):
         if current_time >= target_time_str:
             return True
 
-        # 计算等待时间
         target_h, target_m = map(int, target_time_str.split(':'))
         current_h, current_m = now.hour, now.minute
-
         wait_minutes = (target_h - current_h) * 60 + (target_m - current_m)
 
         if wait_minutes <= 0:
             return True
 
         print(f"  等待中... 当前时间: {current_time}, 目标时间: {target_time_str}")
-        time.sleep(min(wait_minutes * 60, 60))  # 每分钟检查一次
+        time.sleep(min(wait_minutes * 60, 60))
 
 
 def run_report(report_type):
@@ -90,38 +88,67 @@ def main():
     print(f"当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
+    # 记录当天日期，用于跨天重置标志位
+    current_date = date.today()
     noon_reported = False
     close_reported = False
 
     while True:
-        # 检查是否是交易日
-        if not is_trading_day():
-            print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 今天不是交易日，等待明天...")
-            time.sleep(3600)  # 每小时检查一次
-            continue
+        try:
+            today = date.today()
 
-        current_time = datetime.now().strftime("%H:%M")
+            # 跨天重置标志位
+            if today != current_date:
+                print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 新的一天，重置报告状态")
+                current_date = today
+                noon_reported = False
+                close_reported = False
 
-        # 午盘报告 (11:30之后)
-        if not noon_reported and current_time >= "11:30":
-            print(f"\n[{current_time}] 到达午盘时间，生成报告...")
-            run_report('noon')
-            noon_reported = True
+            # 检查是否是交易日
+            if not is_trading_day():
+                print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 今天不是交易日，等待明天...")
+                time.sleep(3600)
+                continue
 
-        # 收盘报告 (15:30之后)
-        if not close_reported and current_time >= "15:30":
-            print(f"\n[{current_time}] 到达收盘时间，生成报告...")
-            run_report('close')
-            close_reported = True
+            current_time = datetime.now().strftime("%H:%M")
 
-        # 如果两个报告都完成了，等待到第二天
-        if noon_reported and close_reported:
-            print(f"\n[{current_time}] 今日报告已全部生成，等待明天...")
-            time.sleep(3600)  # 每小时检查一次，等待到第二天
-            continue
+            # 午盘报告 (11:30之后)
+            if not noon_reported and current_time >= "11:30":
+                print(f"\n[{current_time}] 到达午盘时间，生成报告...")
+                try:
+                    run_report('noon')
+                except Exception as e:
+                    print(f"[错误] 午盘报告生成失败: {e}")
+                    traceback.print_exc()
+                noon_reported = True
 
-        # 等待下一次检查
-        time.sleep(60)  # 每分钟检查一次
+            # 收盘报告 (15:30之后)
+            if not close_reported and current_time >= "15:30":
+                print(f"\n[{current_time}] 到达收盘时间，生成报告...")
+                try:
+                    run_report('close')
+                except Exception as e:
+                    print(f"[错误] 收盘报告生成失败: {e}")
+                    traceback.print_exc()
+                close_reported = True
+
+            # 如果两个报告都完成了，等待到第二天
+            if noon_reported and close_reported:
+                print(f"\n[{current_time}] 今日报告已全部生成，等待明天...")
+                time.sleep(3600)
+                continue
+
+            # 等待下一次检查
+            time.sleep(60)
+
+        except KeyboardInterrupt:
+            print("\n\n用户中断，定时报告系统退出。")
+            break
+        except Exception as e:
+            print(f"\n[错误] 主循环异常: {e}")
+            traceback.print_exc()
+            print("  60秒后重试...")
+            time.sleep(60)
 
 
 if __name__ == '__main__':

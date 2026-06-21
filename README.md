@@ -5,8 +5,10 @@
 - 📊 获取股票分时资金流向数据（分钟级）
 - 📈 生成资金流向**动画**（GIF格式）
 - 💾 保存历史数据到CSV文件
-- ⏰ **自动定时生成**：午盘(11:30)和收盘(15:00)后自动生成
+- ⏰ **自动定时生成**：午盘(11:30)和收盘(15:30)后自动生成
 - 🔥 板块资金流向**折线图对比**（所有板块在同一张图上）
+- 🔄 **多源数据获取**：新浪(akshare)为主力源，东财为备用，自动切换
+- ✅ **多API交叉验证**：确保数据准确性
 
 ## 专业级可视化 (v2.0)
 
@@ -33,6 +35,14 @@
 pip install -r requirements.txt
 ```
 
+依赖列表：
+- `requests` - HTTP请求
+- `pandas` - 数据处理
+- `numpy` - 数值计算
+- `matplotlib` - 图表生成
+- `Pillow` - GIF动画
+- `akshare` - 新浪数据源（稳定，不易被封）
+
 ### 2. 配置监控股票
 
 编辑 `config.py`，修改 `STOCK_LIST`：
@@ -54,21 +64,44 @@ python scheduled_report.py
 ```
 
 程序会自动在以下时间生成报告：
-- **11:30** - 午盘报告
-- **15:00** - 收盘报告
+- **11:30** - 午盘报告（上午场 09:30-11:30）
+- **15:30** - 收盘报告（全天场 09:30-15:00）
 
 #### 方式二：手动运行
 
 ```bash
-# 生成所有动画（个股 + 板块折线图）
-python flow_animator.py
+# 生成上午场报告
+python flow_animator.py noon
 
-# 测试动画（使用模拟数据）
+# 生成全天场报告
+python flow_animator.py close
+
+# 实时监控（交易时间内自动刷新）
+python realtime_monitor.py
+
+# 板块资金流向监控
+python sector_flow_monitor.py
+```
+
+#### 方式三：测试动画（使用模拟数据）
+
+```bash
 python test_animation.py
-
-# 测试板块折线图动画（使用模拟数据）
 python test_sector_animation.py
 ```
+
+## 数据源策略
+
+系统采用多源自动切换策略，确保数据稳定获取：
+
+| 优先级 | 数据源 | 特点 | 状态 |
+|--------|--------|------|------|
+| 1 | 东方财富 | 分时K线精细（分钟级） | 易被限流 |
+| 2 | 新浪(akshare) | 稳定不易被封 | **推荐** |
+
+- 优先尝试东财分时数据（更精细）
+- 东财不可用时自动切换到新浪源
+- 新浪源使用模拟曲线（基于真实排名数据）
 
 ## 输出说明
 
@@ -78,8 +111,10 @@ python test_sector_animation.py
 
 | 文件名 | 说明 |
 |--------|------|
-| `{代码}_{名称}_{日期}_flow.gif` | 个股资金流向动画（双子图） |
-| `sector_lines_{日期}_flow.gif` | **板块资金流向折线图对比** |
+| `{代码}_{名称}_{日期}_noon_flow.gif` | 个股上午场动画 |
+| `{代码}_{名称}_{日期}_close_flow.gif` | 个股全天场动画 |
+| `sector_lines_{日期}_noon_flow.gif` | 板块上午场折线图 |
+| `sector_lines_{日期}_close_flow.gif` | 板块全天场折线图 |
 
 ### 数据文件（CSV）
 
@@ -108,10 +143,6 @@ python test_sector_animation.py
    - 关键指标：实时数值显示
    - 数据信息：股票信息、数据点、时间范围
 
-4. **底部进度条**
-   - 动画进度指示
-   - 当前时间显示
-
 ### 板块动画（折线图对比）
 
 - **所有板块在同一张图上显示**
@@ -119,6 +150,7 @@ python test_sector_animation.py
 - 动画逐步绘制各板块的走势
 - 可以直观对比各板块资金流向的强弱
 - 右侧实时排名面板
+- 支持上午场/全天场两种模式
 
 ## 资金分类说明
 
@@ -135,35 +167,33 @@ python test_sector_animation.py
 |------|------|------|
 | industry | 行业板块 | 半导体、白酒、医药 |
 | concept | 概念板块 | 人工智能、新能源 |
-| region | 地域板块 | 北京、上海、广东 |
-
-## 动画速度设置
-
-| 速度 | 说明 | 适用场景 |
-|------|------|----------|
-| slow | 慢速（约8秒） | 详细观察 |
-| normal | 正常（约4秒） | 日常使用 |
-| fast | 快速（约1秒） | 快速浏览 |
 
 ## 注意事项
 
 - 需要在 **交易时间** 运行才能获取实时数据
-- 数据来源：东方财富（免费接口，无需登录）
-- **API限制**：请求过于频繁会被临时封禁，请耐心等待
+- 数据来源：东方财富 + 新浪（免费接口，无需登录）
+- **API限制**：东财请求过于频繁会被临时封禁，系统会自动切换到新浪源
 - 非交易时间运行会使用最近一次的数据
+- 定时报告系统支持跨天自动重置，无需手动重启
 
 ## 文件结构
 
 ```
 caipiao-main/
 ├── config.py              # 配置文件
+├── theme.py               # 公共主题模块（配色、样式）
 ├── fund_monitor.py        # 个股资金流向监控
-├── sector_monitor.py      # 板块数据获取
+├── sector_monitor.py      # 板块数据获取（多源）
 ├── flow_animator.py       # 动画生成器（含板块折线图）
 ├── scheduled_report.py    # 定时报告系统
-├── test_animation.py      # 测试动画（专业风格）
+├── realtime_monitor.py    # 实时监控
+├── sector_flow_monitor.py # 板块资金流向监控
+├── show_preview.py        # 静态预览图生成
+├── test_animation.py      # 测试动画（模拟数据）
 ├── test_sector_animation.py # 测试板块折线图
-├── data/                  # 数据文件
-├── charts/                # 动画和图表
+├── run.bat                # Windows批处理启动
+├── data/                  # 数据文件（git忽略）
+├── charts/                # 动画和图表（git忽略）
+├── requirements.txt       # Python依赖
 └── README.md
 ```

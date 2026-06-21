@@ -12,210 +12,15 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import matplotlib.dates as mdates
 import matplotlib.patheffects as pe
-from matplotlib.colors import LinearSegmentedColormap
 from datetime import datetime
 from fund_monitor import fetch_fund_flow, parse_fund_flow_data
 from sector_monitor import fetch_sector_list, get_sector_top, fetch_sector_line_data, verify_sector_data
 from config import STOCK_LIST, CHART_DIR
+from theme import COLORS, LINE_COLORS, SECTOR_COLORS, apply_dark_style, ease_out_cubic
 
-# ── 专业量化配色方案 (Bloomberg Terminal 风格) ──────────────────
-COLORS = {
-    # 背景层次
-    "bg":           "#0A0E14",   # 主背景 (更深)
-    "bg_secondary": "#0D1219",   # 次级背景
-    "card":         "#131A24",   # 卡片背景
-    "card_hover":   "#1A2332",   # 卡片悬停
-
-    # 网格与边框
-    "grid":         "#1E2A38",   # 主网格线
-    "grid_minor":   "#151D28",   # 次要网格
-    "border":       "#2A3A4E",   # 边框
-    "border_light": "#3A4F6A",   # 亮边框
-
-    # 文字层次
-    "text":         "#E6EDF3",   # 主文字 (高对比)
-    "text_secondary": "#B0BAC5", # 次要文字
-    "text_dim":     "#768390",   # 暗淡文字
-    "text_muted":   "#545D68",   # 更暗文字
-
-    # 金融配色 (专业级)
-    "red":          "#FF4757",   # 涨/流入 (醒目红)
-    "red_bright":   "#FF6B81",   # 涨/流入 亮
-    "red_glow":     "#FF475740", # 红色辉光
-    "red_fill":     "#FF475718", # 红色填充
-
-    "green":        "#2ED573",   # 跌/流出 (醒目绿)
-    "green_bright":  "#7BED9F",  # 跌/流出 亮
-    "green_glow":   "#2ED57340", # 绿色辉光
-    "green_fill":   "#2ED57318", # 绿色填充
-
-    # 功能色
-    "blue":         "#3498DB",   # 主蓝
-    "blue_bright":  "#5DADE2",   # 亮蓝
-    "blue_glow":    "#3498DB30", # 蓝色辉光
-
-    "orange":       "#F39C12",   # 累计线 (醒目橙)
-    "orange_bright": "#F1C40F",  # 亮橙
-    "orange_glow":  "#F39C1230", # 橙色辉光
-
-    "purple":       "#9B59B6",   # 辅助紫
-    "purple_bright": "#BB8FCE",  # 亮紫
-
-    "cyan":         "#1ABC9C",   # 辅助青
-    "cyan_bright":  "#48C9B0",   # 亮青
-    "cyan_glow":    "#1ABC9C30", # 青色辉光
-
-    "yellow":       "#F1C40F",   # 高亮黄
-    "yellow_bright": "#F4D03F",  # 亮黄
-
-    # 特殊效果
-    "glow_white":   "#FFFFFF15", # 白色辉光
-    "shadow":       "#00000040", # 阴影
-}
-
-# 线条配色方案（分时用）- 专业金融终端风格
-LINE_COLORS = {
-    "主力净流入":  {"main": "#FF4757", "glow": "#FF475760", "fill": "#FF475720"},
-    "小单净流入":  {"main": "#3498DB", "glow": "#3498DB60", "fill": "#3498DB20"},
-    "中单净流入":  {"main": "#2ED573", "glow": "#2ED57360", "fill": "#2ED57320"},
-    "大单净流入":  {"main": "#9B59B6", "glow": "#9B59B660", "fill": "#9B59B620"},
-    "超大单净流入": {"main": "#F39C12", "glow": "#F39C1260", "fill": "#F39C1220"},
-    "累计净流入":  {"main": "#F39C12", "glow": "#F39C1260", "fill": "#F39C1220"},
-}
-
-# ── 字体设置 (专业金融终端) ──────────────────────────────────────
-plt.rcParams["font.sans-serif"] = [
-    "Microsoft YaHei",  # 中文优先
-    "SimHei",
-    "Arial Unicode MS",
-    "DejaVu Sans",      # 英文备选
-]
-plt.rcParams["axes.unicode_minus"] = False
-plt.rcParams["font.weight"] = "normal"
-
-
-def _apply_dark_style(fig, axes):
-    """应用专业深色主题到图表 (Bloomberg Terminal 风格)"""
-    fig.patch.set_facecolor(COLORS["bg"])
-
-    for ax in axes:
-        ax.set_facecolor(COLORS["card"])
-
-        # 坐标轴样式
-        ax.tick_params(
-            colors=COLORS["text_dim"],
-            labelsize=9,
-            length=4,
-            width=0.8,
-            direction='out'
-        )
-
-        # 标签样式
-        ax.xaxis.label.set_color(COLORS["text_secondary"])
-        ax.xaxis.label.set_fontsize(11)
-        ax.yaxis.label.set_color(COLORS["text_secondary"])
-        ax.yaxis.label.set_fontsize(11)
-
-        # 标题样式
-        ax.title.set_color(COLORS["text"])
-        ax.title.set_fontsize(13)
-        ax.title.set_fontweight("bold")
-
-        # 边框样式
-        for spine in ax.spines.values():
-            spine.set_color(COLORS["border"])
-            spine.set_linewidth(0.8)
-            spine.set_linestyle('-')
-
-        # 网格样式 (专业级)
-        ax.grid(True, color=COLORS["grid"], alpha=0.5, linewidth=0.6)
-        ax.set_axisbelow(True)  # 网格在数据下方
-
-        # 零线样式
-        ax.axhline(y=0, color=COLORS["border_light"],
-                   linestyle="-", linewidth=1.0, alpha=0.8)
-
-
-def _add_value_marker(ax, x, y, color, fmt="{:.0f}", fontsize=9):
-    """添加专业级当前值标记点 (带辉光效果)"""
-    # 主标记点
-    marker, = ax.plot([], [], "o", color=color, markersize=7,
-                      markeredgecolor='white', markeredgewidth=1.5,
-                      zorder=15, alpha=0.95)
-
-    # 辉光环
-    glow, = ax.plot([], [], "o", color=color, markersize=12,
-                    alpha=0.3, zorder=14)
-
-    # 文字标签 (带阴影)
-    text = ax.annotate(
-        "", xy=(0, 0),
-        fontsize=fontsize,
-        fontweight="bold",
-        color=color,
-        ha="left", va="bottom",
-        path_effects=[
-            pe.withStroke(linewidth=3, foreground=COLORS["card"]),
-            pe.withSimplePatchShadow(
-                offset=(1, -1),
-                shadow_rgbFace=COLORS["shadow"],
-                alpha=0.5
-            )
-        ]
-    )
-    return marker, glow, text
-
-
-def _update_marker(marker, glow, text, x, y, fmt="{:.0f}"):
-    """更新值标记 (带辉光效果)"""
-    if len(x) > 0:
-        x_val = x.iloc[-1]
-        y_val = y.iloc[-1]
-
-        # 更新标记点
-        marker.set_data([x_val], [y_val])
-        glow.set_data([x_val], [y_val])
-
-        # 更新文字
-        text.set_position((x_val, y_val))
-        text.set_text(f" {fmt.format(y_val)}")
-        text.xy = (x_val, y_val)
-
-
-def _add_gradient_fill(ax, x, y, color, alpha=0.15):
-    """添加专业级渐变填充（零线上方/下方）"""
-    # 正值填充
-    fill = ax.fill_between(
-        x, y, 0,
-        where=(y >= 0),
-        color=color,
-        alpha=alpha,
-        interpolate=True
-    )
-
-    # 负值填充
-    fill_neg = ax.fill_between(
-        x, y, 0,
-        where=(y < 0),
-        color=COLORS["green"],
-        alpha=alpha * 0.7,
-        interpolate=True
-    )
-
-    return fill, fill_neg
-
-
-def _ease_out_cubic(t):
-    """三次缓出函数 (更平滑)"""
-    return 1 - (1 - t) ** 3
-
-
-def _ease_in_out_cubic(t):
-    """三次缓入缓出函数"""
-    if t < 0.5:
-        return 4 * t * t * t
-    else:
-        return 1 - pow(-2 * t + 2, 3) / 2
+# 兼容旧名称
+_apply_dark_style = apply_dark_style
+_ease_out_cubic = ease_out_cubic
 
 
 def create_stock_flow_animation(df, stock_code, stock_name, save_path=None, duration=12):
@@ -677,7 +482,7 @@ def create_sector_line_animation(sector_data=None, times=None, save_path=None, d
             times = morning_times
         else:
             afternoon_times = pd.date_range(start="2026-06-18 13:00", end="2026-06-18 15:00", freq="5min")
-            times = morning_times.append(afternoon_times)
+            times = pd.DatetimeIndex(morning_times.tolist() + afternoon_times.tolist())
         n = len(times)
 
         np.random.seed(42)
@@ -745,19 +550,8 @@ def create_sector_line_animation(sector_data=None, times=None, save_path=None, d
     ax_main.set_xlabel("时间", fontsize=11, color=COLORS["text_secondary"])
     ax_main.set_ylabel("主力累计净流入（亿元）", fontsize=11, color=COLORS["text_secondary"])
 
-    # 专业配色（10个板块）- 金融终端风格
-    sector_colors = [
-        {"main": "#FF4757", "glow": "#FF475760"},  # 红
-        {"main": "#3498DB", "glow": "#3498DB60"},  # 蓝
-        {"main": "#2ED573", "glow": "#2ED57360"},  # 绿
-        {"main": "#F39C12", "glow": "#F39C1260"},  # 橙
-        {"main": "#9B59B6", "glow": "#9B59B660"},  # 紫
-        {"main": "#FF6B81", "glow": "#FF6B8160"},  # 亮红
-        {"main": "#1ABC9C", "glow": "#1ABC9C60"},  # 青
-        {"main": "#E74C3C", "glow": "#E74C3C60"},  # 深红
-        {"main": "#F1C40F", "glow": "#F1C40F60"},  # 黄
-        {"main": "#5DADE2", "glow": "#5DADE260"},  # 亮蓝
-    ]
+    # 板块配色方案（从theme模块导入）
+    sector_colors = SECTOR_COLORS
 
     lines = {}
     glows = {}
@@ -961,7 +755,7 @@ def generate_all_animations(duration=12, report_type='close'):
         raw_data = fetch_fund_flow(stock_code)
         if raw_data:
             df = parse_fund_flow_data(raw_data)
-            save_path = f"{CHART_DIR}/{stock_code}_{stock_name}_{today}_flow.gif"
+            save_path = f"{CHART_DIR}/{stock_code}_{stock_name}_{today}{suffix}_flow.gif"
             create_stock_flow_animation(df, stock_code, stock_name, save_path, duration=duration)
 
     print("\n【生成板块资金流向折线图动画】")

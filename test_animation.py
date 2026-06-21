@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import matplotlib.dates as mdates
 import matplotlib.patheffects as pe
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # ── 专业量化配色方案 (Bloomberg Terminal 风格) ──────────────────
 COLORS = {
@@ -138,7 +138,7 @@ def generate_mock_data():
     """生成模拟数据"""
     morning_times = pd.date_range(start="2026-06-18 09:30", end="2026-06-18 11:30", freq="1min")
     afternoon_times = pd.date_range(start="2026-06-18 13:00", end="2026-06-18 15:00", freq="1min")
-    all_times = morning_times.append(afternoon_times)
+    all_times = pd.DatetimeIndex(morning_times.tolist() + afternoon_times.tolist())
 
     n = len(all_times)
     np.random.seed(42)

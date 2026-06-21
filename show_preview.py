@@ -68,7 +68,7 @@ def generate_preview():
     # 生成模拟数据
     morning_times = pd.date_range(start="2026-06-21 09:30", end="2026-06-21 11:30", freq="1min")
     afternoon_times = pd.date_range(start="2026-06-21 13:00", end="2026-06-21 15:00", freq="1min")
-    all_times = morning_times.append(afternoon_times)
+    all_times = pd.DatetimeIndex(morning_times.tolist() + afternoon_times.tolist())
     n = len(all_times)
     np.random.seed(42)
 
